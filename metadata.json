@@ -1,0 +1,6 @@
+{
+  "name": "MedPulse",
+  "description": "Smart AI-powered digital healthcare platform for personalized nutrition, calories tracking, chronic disease management, and automated consultation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

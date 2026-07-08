@@ -1,0 +1,29 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Allow read, write to MedPulse Collections for real-time global synchronization
+    match /doctors/{document} {
+      allow read, write: if true;
+    }
+    match /pharmacies/{document} {
+      allow read, write: if true;
+    }
+    match /prescriptions/{document} {
+      allow read, write: if true;
+    }
+    match /users/{document} {
+      allow read, write: if true;
+    }
+    match /system_config/{document} {
+      allow read, write: if true;
+    }
+    match /clinical_sessions/{document} {
+      allow read, write: if true;
+    }
+
+    // Legacy MedPulse secure data synchronization channel
+    match /medpulse/database {
+      allow read, write: if true;
+    }
+  }
+}
