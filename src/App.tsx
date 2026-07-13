@@ -124,7 +124,11 @@ const handleLocalApiRequest = async (url: any, init: any): Promise<Response> => 
   };
 
   const saveLocalTable = (key: string, data: any) => {
-    localStorage.setItem(key, JSON.stringify(data));
+    try {
+      localStorage.setItem(key, JSON.stringify(data));
+    } catch (err) {
+      console.warn('[MedPulse] localStorage write failed in saveLocalTable:', err);
+    }
   };
 
   // Initialize standard tables with medically polished, highly realistic databases
@@ -243,7 +247,12 @@ const handleLocalApiRequest = async (url: any, init: any): Promise<Response> => 
   const localPharmacies = loadLocalTable('medpulse_pharmacies', defaultPharmacies);
   const localPrescriptions = loadLocalTable('medpulse_prescriptions', defaultPrescriptions);
 
-  let currentEmail = localStorage.getItem('medpulse_current_email') || 'admin@medpulse.com';
+  let currentEmail = 'admin@medpulse.com';
+  try {
+    currentEmail = localStorage.getItem('medpulse_current_email') || 'admin@medpulse.com';
+  } catch (err) {
+    console.warn('[MedPulse] localStorage read failed for currentEmail:', err);
+  }
 
   const respondJSON = (status: number, data: any) => {
     return new Response(JSON.stringify(data), {
@@ -308,7 +317,9 @@ const handleLocalApiRequest = async (url: any, init: any): Promise<Response> => 
       saveLocalTable('medpulse_users', localUsers);
     }
 
-    localStorage.setItem('medpulse_current_email', email);
+    try {
+      localStorage.setItem('medpulse_current_email', email);
+    } catch (err) {}
     return respondJSON(200, { success: true, user });
   }
 
@@ -339,7 +350,9 @@ const handleLocalApiRequest = async (url: any, init: any): Promise<Response> => 
 
     localUsers.push(newUser);
     saveLocalTable('medpulse_users', localUsers);
-    localStorage.setItem('medpulse_current_email', email);
+    try {
+      localStorage.setItem('medpulse_current_email', email);
+    } catch (err) {}
     return respondJSON(200, { success: true, user: newUser });
   }
 
@@ -355,7 +368,9 @@ const handleLocalApiRequest = async (url: any, init: any): Promise<Response> => 
         localUsers[idx] = { ...localUsers[idx], ...body };
         saveLocalTable('medpulse_users', localUsers);
         if (localUsers[idx]?.email) {
-          localStorage.setItem('medpulse_current_email', localUsers[idx].email);
+          try {
+            localStorage.setItem('medpulse_current_email', localUsers[idx].email);
+          } catch (err) {}
         }
         return respondJSON(200, { success: true, user: localUsers[idx] });
       }
@@ -799,9 +814,26 @@ const handleLocalApiRequest = async (url: any, init: any): Promise<Response> => 
 let originalFetch = window.fetch;
 const customGlobalFetch = async function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const urlStr = typeof input === 'string' ? input : (input instanceof URL ? input.toString() : (input as any).url || '');
-  if (urlStr.startsWith('/api/')) {
+  
+  let isApi = false;
+  try {
+    if (urlStr.startsWith('/') || urlStr.startsWith('http://') || urlStr.startsWith('https://')) {
+      const urlObj = urlStr.startsWith('/') ? new URL(urlStr, window.location.origin) : new URL(urlStr);
+      isApi = urlObj.pathname.startsWith('/api/');
+    } else {
+      isApi = urlStr.includes('/api/');
+    }
+  } catch (e) {
+    isApi = urlStr.includes('/api/');
+  }
+
+  if (isApi) {
     try {
-      const isNetlify = window.location.hostname.includes('netlify.app');
+      let isNetlify = false;
+      try {
+        isNetlify = window.location.hostname.includes('netlify.app');
+      } catch {}
+
       if (isNetlify) {
         // Direct local storage routing to avoid slow connection delays or 404 blocks on static hosts like Netlify
         return await handleLocalApiRequest(input, init);
@@ -810,8 +842,14 @@ const customGlobalFetch = async function (input: RequestInfo | URL, init?: Reque
       const apiBase = "";
       const targetInput = typeof input === 'string' && input.startsWith('/api/') ? apiBase + input : input;
 
-      // Inject user email header
-      const email = localStorage.getItem('medpulse_current_email') || '';
+      // Inject user email header with fallback try-catch for iframe security constraints
+      let email = '';
+      try {
+        email = localStorage.getItem('medpulse_current_email') || '';
+      } catch (err) {
+        console.warn('[MedPulse] localStorage read failed in customGlobalFetch:', err);
+      }
+
       const headers = new Headers(init?.headers);
       if (email) {
         headers.set('x-user-email', email);
@@ -860,7 +898,7 @@ const customGlobalFetch = async function (input: RequestInfo | URL, init?: Reque
           });
         }
       } else {
-        return new Response(JSON.stringify({ error: 'عذراً، حدث خطأ في الشبكة ولم نتمكن من إرسال البيانات.' }), {
+        return new Response(JSON.stringify({ error: 'عذراً، حدّث خطأ في الشبكة ولم نتمكن من إرسال البيانات.' }), {
           status: 500,
           headers: { 'Content-Type': 'application/json' }
         });

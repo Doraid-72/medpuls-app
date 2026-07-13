@@ -3,7 +3,18 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
+
+// Resolve the correct WebSocket constructor class (safe from default-export wrapper issues in ESBuild CJS bundler outputs)
+const WebSocketClass = (ws as any)?.WebSocket || (ws as any)?.default || ws;
+
+// Polyfill global WebSocket for Node environments lacking native WebSocket support (e.g. Node <= 20)
+if (typeof globalThis.WebSocket === "undefined") {
+  (globalThis as any).WebSocket = WebSocketClass;
+}
+if (typeof global === "object" && typeof (global as any).WebSocket === "undefined") {
+  (global as any).WebSocket = WebSocketClass;
+}
 import { 
   UserHealthProfile, 
   Prescription, 
@@ -269,21 +280,58 @@ const calorieAndDietCache = new Map<string, any>();
 // -------------------------------------------------------------
 // SUPABASE SYNC SERVICE (REAL-TIME CLOUD PERSISTENCE)
 // -------------------------------------------------------------
-const SUPABASE_URL = process.env.SUPABASE_URL || "https://crpqurnewcwqccykiyjp.supabase.co/";
+const SUPABASE_URL = process.env.SUPABASE_URL || "";
 // Note: Row-Level Security (RLS) can block server upserts if using a publishable anon key.
 // To bypass RLS and allow full server sync, define SUPABASE_SERVICE_ROLE_KEY in your server environment variables.
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || "sb_publishable_Cm1WbOw27UZUTXJa6RTqhQ_cHP8p476";
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY || process.env.SUPABASE_KEY || "";
 
-if (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY) {
-  console.log("🔌 [MedPulse Supabase] Initializing client with SERVICE_ROLE key (bypassing Row-Level Security).");
-} else {
-  console.log("🔌 [MedPulse Supabase] Initializing client with project URL:", SUPABASE_URL);
-}
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: {
-    persistSession: false
+// Robust configuration detection to prevent crashing or continuous abnormal socket errors when not configured
+const isSupabaseConfigured = !!(
+  SUPABASE_URL && 
+  SUPABASE_URL.startsWith("https://") && 
+  !SUPABASE_URL.includes("xyz.supabase.co") && 
+  !SUPABASE_URL.includes("your-project") && 
+  SUPABASE_KEY &&
+  !SUPABASE_KEY.includes("your-anon-key") &&
+  !SUPABASE_KEY.includes("your-service-role-key")
+);
+
+let supabase: any = null;
+let isSupabaseInitAttempted = false;
+
+async function getSupabaseClient() {
+  if (isSupabaseInitAttempted) return supabase;
+  isSupabaseInitAttempted = true;
+
+  if (isSupabaseConfigured) {
+    if (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY) {
+      console.log("🔌 [MedPulse Supabase] Initializing client dynamically with SERVICE_ROLE key (bypassing Row-Level Security).");
+    } else {
+      console.log("🔌 [MedPulse Supabase] Initializing client dynamically with project URL:", SUPABASE_URL);
+    }
+    try {
+      const { createClient } = await import("@supabase/supabase-js");
+      supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+        auth: {
+          persistSession: false
+        },
+        realtime: {
+          transport: WebSocketClass as any,
+          heartbeatIntervalMs: 15000,
+          params: {
+            eventsPerSecond: 10
+          }
+        }
+      });
+    } catch (err: any) {
+      console.warn("⚠️ [MedPulse Supabase] Failed to initialize Supabase client dynamically (is @supabase/supabase-js installed?):", err.message || err);
+      supabase = null;
+    }
+  } else {
+    console.log("ℹ️ [MedPulse Supabase] Supabase is NOT configured or has placeholder values. Using local JSON database (medpulse_db.json) fallback.");
   }
-});
+  return supabase;
+}
 
 let lastReceivedUpdatedAt = "";
 
@@ -510,6 +558,12 @@ function handleConfigChange(payload: any) {
 }
 
 async function loadFromSupabase() {
+  const client = await getSupabaseClient();
+  if (!client) {
+    console.info("ℹ️ [MedPulse Supabase] Skipping load from Supabase (not configured).");
+    return;
+  }
+  const supabase = client;
   try {
     console.log("⏳ [MedPulse Supabase] Syncing all main collections from Supabase...");
 
@@ -565,13 +619,16 @@ async function loadFromSupabase() {
 
     console.log("🔥 [MedPulse Supabase] Successfully restored all collections from Supabase!");
   } catch (err: any) {
-    console.error("❌ [MedPulse Supabase] Failed loading collections from Supabase. Attempting to seed...", err.message || err);
+    console.warn("⚠️ [MedPulse Supabase] Failed loading collections from Supabase. Attempting to seed locally...", err.message || err);
     await saveToSupabase();
   }
 }
 
 // Reconcile and mirror local state arrays perfectly with Supabase tables
 async function saveToSupabase() {
+  const client = await getSupabaseClient();
+  if (!client) return;
+  const supabase = client;
   isSyncingToSupabase = true;
   try {
     console.log("🔥 [MedPulse Supabase] Reconciling and mirroring local database to Supabase tables...");
@@ -583,8 +640,8 @@ async function saveToSupabase() {
         return;
       }
       
-      const remoteIds = new Set((remoteRows || []).map(r => r.id));
-      const localIds = new Set(localList.map(item => String(idField === "email" ? encodeEmail(item[idField]) : item[idField])));
+      const remoteIds = new Set<string>((remoteRows || []).map(r => String((r as any).id)));
+      const localIds = new Set<string>(localList.map(item => String(idField === "email" ? encodeEmail(item[idField]) : item[idField])));
 
       // Delete removed rows from Supabase
       const toDelete = Array.from(remoteIds).filter(id => !localIds.has(id));
@@ -606,7 +663,7 @@ async function saveToSupabase() {
       if (upsertData.length > 0) {
         const { error: upsertErr } = await supabase.from(tableName).upsert(upsertData);
         if (upsertErr) {
-          console.error(`❌ Error upserting to ${tableName}:`, upsertErr.message);
+          console.warn(`⚠️ Error upserting to ${tableName}:`, upsertErr.message);
         }
       }
     };
@@ -623,7 +680,7 @@ async function saveToSupabase() {
 
     console.log("✅ [MedPulse Supabase] Global multi-table Supabase mirroring completed successfully.");
   } catch (err: any) {
-    console.error("❌ [MedPulse Supabase] Failed multi-table Supabase sync:", err.message || err);
+    console.warn("⚠️ [MedPulse Supabase] Failed multi-table Supabase sync:", err.message || err);
   } finally {
     setTimeout(() => {
       isSyncingToSupabase = false;
@@ -631,7 +688,13 @@ async function saveToSupabase() {
   }
 }
 
-function subscribeToSupabase() {
+async function subscribeToSupabase() {
+  const client = await getSupabaseClient();
+  if (!client) {
+    console.info("ℹ️ [MedPulse Supabase] Skipping real-time subscription (not configured).");
+    return;
+  }
+  const supabase = client;
   try {
     console.log("📡 [MedPulse Supabase Real-time] Establishing multi-table real-time subscriptions...");
 
@@ -645,13 +708,26 @@ function subscribeToSupabase() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'system_config' }, handleConfigChange)
       .subscribe((status, err) => {
         if (err) {
-          console.error("❌ [MedPulse Supabase Real-time] Subscription error:", err);
+          const errMsg = err.message || String(err);
+          if (errMsg.includes("1006") || errMsg.includes("socket closed")) {
+            console.info("📡 [MedPulse Supabase Real-time] Connection temporarily idle/reconnecting (socket closed: 1006).");
+          } else {
+            console.warn("⚠️ [MedPulse Supabase Real-time] Subscription error/retry:", errMsg);
+          }
         } else {
-          console.log(`📡 [MedPulse Supabase Real-time] Channel subscription status: ${status}`);
+          if (status === "SUBSCRIBED") {
+            console.log("📡 [MedPulse Supabase Real-time] Channel successfully subscribed.");
+          } else if (status === "CLOSED") {
+            console.info("📡 [MedPulse Supabase Real-time] Channel connection closed (initiating automatic reconnect)...");
+          } else if (status === "TIMED_OUT") {
+            console.warn("⚠️ [MedPulse Supabase Real-time] Channel subscription timed out (retrying)...");
+          } else {
+            console.log(`📡 [MedPulse Supabase Real-time] Channel subscription status: ${status}`);
+          }
         }
       });
-  } catch (err) {
-    console.error("❌ [MedPulse Supabase Real-time] Failed to register multi-table listeners:", err);
+  } catch (err: any) {
+    console.warn("⚠️ [MedPulse Supabase Real-time] Failed to register multi-table listeners:", err.message || err);
   }
 }
 
@@ -696,7 +772,7 @@ function saveDb() {
     
     // Asynchronously back up database changes to Supabase
     saveToSupabase().catch(err => {
-      console.error("❌ Failed async save to Supabase:", err);
+      console.warn("⚠️ Failed async save to Supabase:", err);
     });
     
     // Broadcast the updated state to all connected Server-Sent Events clients
@@ -725,7 +801,7 @@ loadFromSupabase().then(() => {
   // Establish real-time sync with Supabase and other connected locations
   subscribeToSupabase();
 }).catch(err => {
-  console.error("Failed startup Supabase restoration sync:", err);
+  console.warn("⚠️ Failed startup Supabase restoration sync:", err.message || err);
   // Fail-safe: try subscribing to Supabase updates even if initial load had issues
   subscribeToSupabase();
 });
@@ -1768,7 +1844,10 @@ app.post("/api/chatbot", async (req, res) => {
 async function bootstrap() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { 
+        middlewareMode: true,
+        allowedHosts: true
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
