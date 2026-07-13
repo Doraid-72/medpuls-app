@@ -839,7 +839,21 @@ const customGlobalFetch = async function (input: RequestInfo | URL, init?: Reque
         return await handleLocalApiRequest(input, init);
       }
       
-      const apiBase = "";
+      // Dynamically resolve apiBase from localStorage if we are on a static/custom domain that doesn't host the backend
+      let apiBase = "";
+      try {
+        const storedUrl = localStorage.getItem('medpulse_platform_url');
+        if (storedUrl && storedUrl.startsWith('http')) {
+          const storedOrigin = new URL(storedUrl).origin;
+          // If we are currently not on that origin (e.g. we are on a custom static domain or Netlify/Vercel)
+          if (window.location.origin !== storedOrigin) {
+            apiBase = storedOrigin;
+          }
+        }
+      } catch (err) {
+        console.warn('[MedPulse] Failed to resolve dynamic apiBase:', err);
+      }
+      
       const targetInput = typeof input === 'string' && input.startsWith('/api/') ? apiBase + input : input;
 
       // Inject user email header with fallback try-catch for iframe security constraints
@@ -1630,7 +1644,19 @@ export default function App() {
     const connectSSE = () => {
       try {
         console.log("📡 [MedPulse Sync] Connecting to real-time Server-Sent Events stream...");
-        const apiBase = "";
+        // Dynamically resolve apiBase from localStorage if we are on a static/custom domain that doesn't host the backend
+        let apiBase = "";
+        try {
+          const storedUrl = localStorage.getItem('medpulse_platform_url');
+          if (storedUrl && storedUrl.startsWith('http')) {
+            const storedOrigin = new URL(storedUrl).origin;
+            if (window.location.origin !== storedOrigin) {
+              apiBase = storedOrigin;
+            }
+          }
+        } catch (err) {
+          console.warn('[MedPulse] Failed to resolve dynamic apiBase for SSE:', err);
+        }
         eventSource = new EventSource(apiBase + "/api/sync-stream");
 
         eventSource.onmessage = (event) => {
