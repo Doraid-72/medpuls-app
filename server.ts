@@ -1846,7 +1846,13 @@ async function bootstrap() {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
-        allowedHosts: true
+        allowedHosts: [
+          'medpulse-iq.com',
+          '.medpulse-iq.com',
+          'localhost',
+          '127.0.0.1',
+          '.run.app',
+        ],
       },
       appType: "spa",
     });
