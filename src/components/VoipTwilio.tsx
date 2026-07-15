@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { TwilioConfig, UserHealthProfile, DoctorInfo } from '../types';
 import { Phone, Settings, Activity, ShieldCheck, Mail, Volume2, ToggleLeft, ToggleRight, Mic, Play, Square, Loader2, MessageSquare, Clock, Plus, ExternalLink, BookmarkCheck, PhoneCall, Video, Wifi, X, UploadCloud, FileText, Paperclip, Trash2 } from 'lucide-react';
 import DoctorClinicalWorkspace from './DoctorClinicalWorkspace';
+import { sendSupabaseMessage, fetchSessionMessagesFromSupabase } from '../supabase';
 
 export const MEDIATOR_WHATSAPP_PHONE = "+9647754321000"; // رقم وساطة المنصة الموحد لفلترة الاستشارات وحماية غطاء خصوصية الأطباء
 
@@ -449,6 +450,41 @@ export default function VoipTwilio({ profile, doctors = [], onWriteRxForPatient,
     const docSess = (sessions || []).filter(s => s && s.doctorId === simulatedDocId);
     return docSess.length > 0 ? docSess[0].id : null;
   });
+
+  // Synchronize active chat messages directly from Supabase messages table when selected
+  useEffect(() => {
+    if (!selectedSessionId) return;
+
+    let isMounted = true;
+    const syncActiveChat = async () => {
+      const messages = await fetchSessionMessagesFromSupabase(selectedSessionId);
+      if (messages && isMounted) {
+        // Find if they differ from current session messages to avoid redundant state updates
+        const currentSess = sessions.find(s => s.id === selectedSessionId);
+        if (currentSess) {
+          const hasChanges = JSON.stringify(currentSess.chats) !== JSON.stringify(messages);
+          if (hasChanges) {
+            const updatedSess = {
+              ...currentSess,
+              chats: messages
+            };
+            const finalSessions = [updatedSess, ...sessions.filter(s => s.id !== selectedSessionId)];
+            saveSessions(finalSessions);
+          }
+        }
+      }
+    };
+
+    syncActiveChat();
+
+    // Poll every 3 seconds for perfect fallback in case Realtime/SSE subscription is interrupted
+    const interval = setInterval(syncActiveChat, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [selectedSessionId]);
 
   // Track paid doctors individually
   const [paidDocIds, setPaidDocIds] = useState<string[]>(() => {
@@ -1019,6 +1055,10 @@ export default function VoipTwilio({ profile, doctors = [], onWriteRxForPatient,
 
       const updatedSessions = [activeSess, ...sessions.filter(s => s.id !== sessId)];
       saveSessions(updatedSessions);
+
+      // Push to Supabase direct messages table for instant multi-device synchronization
+      sendSupabaseMessage(sessId, 'patient', userMsgText, currentDocId, patientEmail);
+
       setWaText('');
       setUploadedFiles([]);
       setIsWaTyping(true);
@@ -1872,6 +1912,9 @@ export default function VoipTwilio({ profile, doctors = [], onWriteRxForPatient,
                     };
                     const finalSessions = [updatedSess, ...sessions.filter(s => s.id !== activeSess.id)];
                     saveSessions(finalSessions);
+
+                    // Push to Supabase direct messages table for instant multi-device synchronization
+                    sendSupabaseMessage(activeSess.id, 'doctor', txt, activeSess.doctorId, activeSess.patientEmail);
                   }}
                 />
               );

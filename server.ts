@@ -938,6 +938,14 @@ app.get("/api/sync-stream", (req, res) => {
   });
 });
 
+// Get Supabase public config for dynamic client initialization
+app.get("/api/supabase-config", (req, res) => {
+  res.json({
+    supabaseUrl: process.env.SUPABASE_URL || "",
+    supabaseKey: process.env.SUPABASE_KEY || process.env.SUPABASE_SERVICE_KEY || ""
+  });
+});
+
 // Get Clinical Sessions
 app.get("/api/clinical-sessions", (req, res) => {
   res.json(clinicalSessions);
@@ -1843,35 +1851,21 @@ app.post("/api/chatbot", async (req, res) => {
 // -------------------------------------------------------------
 async function bootstrap() {
   if (process.env.NODE_ENV !== "production") {
-    import tailwindcss from '@tailwindcss/vite';
-import react from '@vitejs/plugin-react';
-import path from 'path';
-import { defineConfig } from 'vite';
-
-export default defineConfig(() => {
-  return {
-    plugins: [react(), tailwindcss()],
-    resolve: {
-      alias: {
-        '@': path.resolve(__dirname, '.'),
+    const vite = await createViteServer({
+      server: { 
+        middlewareMode: true,
+        allowedHosts: [
+          'medpulse-iq.com',
+          '.medpulse-iq.com',
+          'api.medpulse-iq.com',
+          'dashboard.medpulse-iq.com',
+          'localhost',
+          '127.0.0.1',
+          '.run.app',
+        ],
       },
-    },
-    server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modify—file watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
-      // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
-      allowedHosts: [
-        'medpulse-iq.com',
-        '.medpulse-iq.com',
-        'localhost',
-        '127.0.0.1',
-        '.run.app',
-      ],
-    },
-  };
-});
+      appType: "spa",
+    });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");

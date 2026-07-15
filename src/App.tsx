@@ -49,6 +49,7 @@ import AdManager from './components/AdManager';
 
 // Supabase and Server-Sent Events are used for real-time synchronization.
 // No client-side Firebase initialization needed.
+import { initSupabase, getSupabase, sendSupabaseMessage, fetchSessionMessagesFromSupabase } from './supabase';
 
 
 // --- Elite Local Storage Simulation Router (For Static Deployments like Netlify) ---
@@ -1635,6 +1636,88 @@ export default function App() {
       fetchSessions();
     }
   }, [isLoggedIn]);
+
+  // Initialize Supabase and establish PostgreSQL real-time subscription for WhatsApp-style chat messages
+  useEffect(() => {
+    let channel: any = null;
+
+    const setupRealtime = async () => {
+      try {
+        const client = await initSupabase();
+        if (!client) {
+          console.info("ℹ️ [Client Supabase Realtime] Supabase client is not initialized yet. Skipping direct subscription.");
+          return;
+        }
+
+        console.log("📡 [Client Supabase Realtime] Establishing subscription to public.messages...");
+        channel = client
+          .channel('messages-realtime-channel')
+          .on(
+            'postgres_changes',
+            { event: 'INSERT', schema: 'public', table: 'messages' },
+            (payload: any) => {
+              const newRecord = payload.new;
+              if (!newRecord) return;
+
+              console.log("✉️ [Client Supabase Realtime] Received insert payload:", newRecord);
+
+              // Map database fields to the application's ChatMessage format
+              const incomingMsg = {
+                id: newRecord.id || String(Date.now()),
+                sender: newRecord.sender_type === 'DOCTOR' ? 'doctor' as const : 'patient' as const,
+                text: newRecord.content,
+                time: new Date(newRecord.created_at || Date.now()).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })
+              };
+
+              const sessId = newRecord.conversation_id;
+
+              setSessions(prevSessions => {
+                const sessionIndex = prevSessions.findIndex(s => s.id === sessId);
+                if (sessionIndex === -1) {
+                  // If we don't have the session, trigger a fetch to synchronize
+                  fetchSessions();
+                  return prevSessions;
+                }
+
+                const targetSession = prevSessions[sessionIndex];
+
+                // Check for duplicates
+                const messageExists = targetSession.chats.some(m => 
+                  m.id === incomingMsg.id || 
+                  (m.text === incomingMsg.text && Math.abs(new Date(m.time).getTime() - new Date(incomingMsg.time).getTime()) < 5000)
+                );
+                if (messageExists) return prevSessions;
+
+                const updatedSession = {
+                  ...targetSession,
+                  status: incomingMsg.sender === 'patient' ? 'new' as const : 'open' as const,
+                  lastMessageAt: newRecord.created_at || new Date().toISOString(),
+                  lastMessageText: newRecord.content,
+                  chats: [...targetSession.chats, incomingMsg]
+                };
+
+                const copy = [...prevSessions];
+                copy[sessionIndex] = updatedSession;
+                return copy;
+              });
+            }
+          )
+          .subscribe((status: string) => {
+            console.log(`📡 [Client Supabase Realtime] Subscription status: ${status}`);
+          });
+      } catch (err: any) {
+        console.warn("⚠️ [Client Supabase Realtime] Failed setup:", err.message || err);
+      }
+    };
+
+    setupRealtime();
+
+    return () => {
+      if (channel) {
+        channel.unsubscribe();
+      }
+    };
+  }, []);
 
   // Connect to the real-time Server-Sent Events stream for instant cross-device updates
   useEffect(() => {
