@@ -16,26 +16,10 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
-      allowedHosts: [
-        'medpulse-iq.com',
-        '.medpulse-iq.com',
-        'api.medpulse-iq.com',
-        'dashboard.medpulse-iq.com',
-        'localhost',
-        '127.0.0.1',
-        '.run.app',
-      ],
+      allowedHosts: true as const,
     },
     preview: {
-      allowedHosts: [
-        'medpulse-iq.com',
-        '.medpulse-iq.com',
-        'api.medpulse-iq.com',
-        'dashboard.medpulse-iq.com',
-        'localhost',
-        '127.0.0.1',
-        '.run.app',
-      ],
+      allowedHosts: true as const,
     },
   };
 });

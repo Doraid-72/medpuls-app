@@ -1,3 +1,6 @@
+import dotenv from "dotenv";
+dotenv.config();
+
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -1854,15 +1857,7 @@ async function bootstrap() {
     const vite = await createViteServer({
       server: { 
         middlewareMode: true,
-        allowedHosts: [
-          'medpulse-iq.com',
-          '.medpulse-iq.com',
-          'api.medpulse-iq.com',
-          'dashboard.medpulse-iq.com',
-          'localhost',
-          '127.0.0.1',
-          '.run.app',
-        ],
+        allowedHosts: true,
       },
       appType: "spa",
     });
